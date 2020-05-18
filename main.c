@@ -45,10 +45,7 @@ int try_take(char c);
 
 int main(int argc, char* argv[]){
 	char filepath[255], buf[4];
-
-	int option, 
-		fd;
-
+	int option, fd;
 	pthread_t thread_ids[CHEFS];
 	struct info *chef_data[CHEFS];
 
@@ -124,8 +121,8 @@ int main(int argc, char* argv[]){
 
 	// ========================================= Initilize thread data 
 
+    // Do wholesaler things ==========================================
     if( (fd = open(filepath, O_RDONLY)) == -1) errExit("open @main");
-    printf("??????????????????????????????????????????????\n");
     while(read(fd, buf, 3) == 3){
     	printf("the wholesaler delivers %s and %s\n", get_name(buf[0]), get_name(buf[1]));
 		transfer(buf[0], buf[0]);
@@ -148,17 +145,19 @@ int main(int argc, char* argv[]){
 	}
     wholesaler_done++;
     printf("wholesaler done supplying - GOODBYE!!!\n");
+    // ========================================== Do wholesaler things
 
     // Join threads and free resources =================================
-    sem_destroy(&sem_stock_access);
     for(int i = 0; i < CHEFS; i++){
     	pthread_join(thread_ids[i], NULL);
     	free(chef_data[i]);
     }
+    sem_destroy(&sem_stock_access);
+    sem_destroy(&sem_desserts);
     //  ================================= Join threads and free resources
 
 	printf("Desserts made: %d\n", desserts_made);
-    printf("Desserts sold: %d\n", desserts_sold);
+	printf("Desserts sold: %d\n", desserts_sold);
     printf("Stocks:\n%s\n",stock);
 
 
@@ -173,7 +172,10 @@ void print_usage(void){
 }
 
 
-
+/*
+	@parameter c: M,F,W or S character, uppercase matters
+	@return     : (m)ilk, (f)lour, etc. as char array
+*/
 char* get_name(char c){
 	switch(c){
 		case 'M': return "milk";
@@ -184,13 +186,27 @@ char* get_name(char c){
 	}
 }
 
+/*
+	Do chef things, exit when wholesaler is done.
+	@parameter data: struct info pointer as declerad above
+	@return        : NULL
+*/
 void* chef(void* data){
 	struct info *info = data;
 
 	while(wholesaler_done == 0){
-		if (sem_wait(&sem_stock_access) == -1) errExit("sem_wait @chef - sem_stock_access");
 
-	    
+	    if(info->have1 == 1 && info->have2 == 1){
+	    	if (sem_post(&sem_desserts) == -1) errExit("sem_post @chef - sem_desserts");
+	    	dessert_ready++;
+	    	printf("chef%d is preparing the dessert\n",info->chef_no);
+	    	
+	    	info->have1 = 0;
+	    	info->have2 = 0;
+	    	desserts_made++;   	
+	    }
+
+		if (sem_wait(&sem_stock_access) == -1) errExit("sem_wait @chef - sem_stock_access");
 
 	    if(info->have1 == 0 && info->have2 == 0)
 	    	printf("chef%d is waiting for %s and %s\n", info->chef_no, get_name(info->need1), get_name(info->need2)); 
@@ -198,7 +214,6 @@ void* chef(void* data){
 	    	printf("chef%d is waiting for %s\n", info->chef_no, get_name(info->need1)); 
 	    else if(info->have2 == 0)
 	    	printf("chef%d is waiting for %s\n", info->chef_no, get_name(info->need2)); 
-
 
 	    //printf("%s\n",stock);
 	    if(info->have1 == 0 && try_take(info->need1) == 0){
@@ -209,22 +224,22 @@ void* chef(void* data){
 	    	info->have2 = 1;
 	    	printf("chef%d has taken the %s\n", info->chef_no,get_name(info->need2)); 
 	    }
-	    else if(info->have1 == 1 && info->have2 == 1){
-	    	dessert_ready++;
-	    	printf("chef%d is preparing the dessert\n",info->chef_no);
-	    	if (sem_post(&sem_desserts) == -1) errExit("sem_post @chef - sem_desserts");
-	    	info->have1 = 0;
-	    	info->have2 = 0;
-	    	desserts_made++;
-	    	
-	    }
 
-	    if (sem_post(&sem_stock_access) == -1) errExit("sem_post @chef - sem_stock_access");		
+
+	    if (sem_post(&sem_stock_access) == -1) errExit("sem_post @chef - sem_stock_access");
+	    		
 	}
 	printf("Wholesaler said goodbye to chef%d - GOODBYE!!!\n",info->chef_no);
     pthread_exit(NULL);
 }
 
+
+/*
+	Transfer 2 items to global stock[] array, overflow not checked
+	Items are placed at first empty spots found
+	@parameter c1: item 1, upper case ingredient
+	@parameter c2: item 2, upper case ingredient
+*/
 void transfer(char c1, char c2){
 	if (sem_wait(&sem_stock_access) == -1) errExit("sem_wait @transfer - sem_stock_access");
 
@@ -244,6 +259,12 @@ void transfer(char c1, char c2){
 	if (sem_post(&sem_stock_access) == -1) errExit("sem_wait @transfer- sem_stock_access");
 }
 
+/*
+	Try to take an item from the stock[] array
+	@on_success : replace the item(char) taken from the array with '-'
+				  and @return 0
+	@on_failure : @return 1
+*/
 int try_take(char c){
 	for(int i = 0; i < STOCK; i++){
 		if(stock[i] == c){
